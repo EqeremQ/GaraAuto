@@ -163,7 +163,7 @@ public class GaraAuto {
 
             pool.shutdownNow();
 
-            System.out.println("\n--- CLASSIFICA ---");
+            System.out.println("\nClassifica");
             for (int i = 0; i < risultati.size(); i++) {
                 Risultato r = risultati.get(i);
                 System.out.printf("%d) %s - tempo(ms)=%d%n",
@@ -174,5 +174,86 @@ public class GaraAuto {
         }
 
         public boolean isGaraFermata() { return garaFermata; }
+        // Restituisce il CountDownLatch della partenza (per essere usato dal Giudice)
+        public CountDownLatch getSegnalePartenza() {
+            return segnalePartenza;
+        }
+
+        // Restituisce la coda degli arrivi (per essere letta dal Giudice)
+        public BlockingQueue<Risultato> getCodaArrivi() {
+            return codaArrivi;
+        }
+
+        // Numero di partecipanti attesi
+        public int getNumeroPartecipanti() {
+            return partecipanti.size();
+        }
+
+        // Avvia i runnable dei partecipanti (submits al pool) senza dare il via:
+        public void avviaPartecipanti() {
+            for (Partecipante p : partecipanti) {
+                pool.submit(new PartecipanteRunnable(p, pista, segnalePartenza, codaArrivi, this));
+            }
+        }
+
+        // Metodo pubblico per chiudere il pool (il Giudice lo chiamerà alla fine)
+        public void chiudiPool() {
+            pool.shutdownNow();
+        }
+    }
+    /**
+     * Giudice effettua il conto alla rovescia, dà il via e monitora gli arrivi.
+     */
+    public static class Giudice implements Runnable {
+        private final GestoreGara gestore;
+
+        public Giudice(GestoreGara gestore) {
+            this.gestore = gestore;
+        }
+
+        @Override
+        public void run() {
+            try {
+                // Conto alla rovescia prima della partenza
+                System.out.println("Giudice: partenza fra 3...");
+                Thread.sleep(1000);
+                System.out.println("3");
+                Thread.sleep(1000);
+                System.out.println("2");
+                Thread.sleep(1000);
+                System.out.println("1");
+                Thread.sleep(300);
+                System.out.println("Giudice: via");
+                // dà il via
+                gestore.getSegnalePartenza().countDown();
+
+                // Raccoglie gli arrivi dalla coda e annuncia ogni taglio del traguardo
+                List<Risultato> classificaParziale = new ArrayList<>();
+                int tot = gestore.getNumeroPartecipanti();
+                for (int i = 0; i < tot; i++) {
+                    Risultato r = gestore.getCodaArrivi().take(); // blocking
+                    classificaParziale.add(r);
+                    System.out.println("Giudice: " + r.getPartecipante().getNome() + " ha tagliato il traguardo! (" + (i+1) + "°)");
+                }
+
+                // Stampa classifica finale
+                System.out.println("\nClassifica Finale");
+                for (int i = 0; i < classificaParziale.size(); i++) {
+                    Risultato r = classificaParziale.get(i);
+                    System.out.printf("%d) %s - tempo(ms)=%d%n",
+                            i + 1,
+                            r.getPartecipante().getNome(),
+                            r.getTempoArrivoMillis());
+                }
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.out.println("Giudice: interrotto.");
+            } finally {
+                // Assicura la chiusura del pool dei partecipanti
+                gestore.chiudiPool();
+                System.out.println("Giudice: Gara terminata.");
+            }
+        }
     }
 }

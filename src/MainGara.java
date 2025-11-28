@@ -33,13 +33,21 @@ public class MainGara {
 
         GaraAuto.Pista pista = new GaraAuto.Pista("P1", "Pista Principale", lunghezza);
 
+        // Crea il gestore gara e avvia i runnable dei partecipanti (ma NON dà il via)
         GaraAuto.GestoreGara gestore = new GaraAuto.GestoreGara(pista, partecipanti);
+        gestore.avviaPartecipanti();
 
-        System.out.println("La gara inizierà tra 2 secondi...");
-        try { Thread.sleep(2000); } catch (InterruptedException e) {}
+        // Crea e avvia il giudice (il giudice farà il conto alla rovescia e darà il via)
+        Thread threadGiudice = new Thread(new GaraAuto.Giudice(gestore));
+        threadGiudice.start();
 
-        gestore.avviaGaraEAttendiArrivi();
+        // Attende che il giudice completi (quindi la gara è conclusa)
+        try {
+            threadGiudice.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
-        System.out.println("\nGara terminata.");
+        System.out.println("\nMain: Gara conclusa, esco.");
     }
 }
