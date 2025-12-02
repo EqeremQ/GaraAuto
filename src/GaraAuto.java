@@ -2,8 +2,14 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * GaraAuto - versione con podio sincronizzato
+ */
 public class GaraAuto {
 
+    /**
+     * Classe astratta Partecipante
+     */
     public static abstract class Partecipante {
         protected final String id;
         protected final String nome;
@@ -25,13 +31,12 @@ public class GaraAuto {
         public String getId() { return id; }
         public String getNome() { return nome; }
         public boolean isRitirato() { return ritirato.get(); }
+        public void ritira() { ritirato.set(true); }
     }
 
     /**
-     *Classe Auto
-     *
+     * Classe Auto
      */
-
     public static class Auto extends Partecipante {
         public Auto(String id, String nome, double velocita) {
             super(id, nome, velocita);
@@ -41,7 +46,6 @@ public class GaraAuto {
     /**
      * Classe Pista
      */
-
     public static class Pista {
         private final String id;
         private final String nome;
@@ -58,9 +62,8 @@ public class GaraAuto {
     }
 
     /**
-     *Classe Risultato
+     * Classe Risultato
      */
-
     public static class Risultato {
         private final Partecipante partecipante;
         private final long tempoArrivoMillis;
@@ -77,7 +80,6 @@ public class GaraAuto {
     /**
      * Thread di un partecipante
      */
-
     public static class PartecipanteRunnable implements Runnable {
         private final Partecipante p;
         private final Pista pista;
@@ -106,7 +108,13 @@ public class GaraAuto {
                     p.avanzaUnSecondo();
 
                     if (p.getPosizione() >= pista.getLunghezza()) {
-                        codaArrivi.put(new Risultato(p, System.currentTimeMillis()));
+                        // usa il metodo registrazione centrale per aggiornare il podio in modo sincronizzato
+                        Risultato r = new Risultato(p, System.currentTimeMillis());
+                        try {
+                            gestore.registraArrivo(r);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
                         break;
                     }
 
@@ -124,7 +132,6 @@ public class GaraAuto {
     /**
      * Gestore della gara
      */
-
     public static class GestoreGara {
         private final List<Partecipante> partecipanti = new CopyOnWriteArrayList<>();
         private final Pista pista;
@@ -133,16 +140,51 @@ public class GaraAuto {
         private final ExecutorService pool;
         private volatile boolean garaFermata = false;
 
+        // Podio e relativo lock (v3.0)
+        private final List<Risultato> podio = new ArrayList<>();
+        private final Object lockPodio = new Object();
+
         public GestoreGara(Pista pista, List<Partecipante> lista) {
             this.pista = pista;
             this.partecipanti.addAll(lista);
-            this.pool = Executors.newFixedThreadPool(lista.size());
+            this.pool = Executors.newFixedThreadPool(Math.max(1, lista.size()));
         }
 
-        public void avviaGaraEAttendiArrivi() {
+        /**
+         * Avvia i runnable dei partecipanti (senza dare il via).
+         */
+        public void avviaPartecipanti() {
             for (Partecipante p : partecipanti) {
                 pool.submit(new PartecipanteRunnable(p, pista, segnalePartenza, codaArrivi, this));
             }
+        }
+
+        /**
+         * Metodo da usare dai runnable per registrare un arrivo in modo sincronizzato.
+         */
+        public void registraArrivo(Risultato r) throws InterruptedException {
+            synchronized (lockPodio) {
+                podio.add(r);
+                System.out.println("Arrivo registrato (podio): "
+                        + r.getPartecipante().getNome()
+                        + " posizione: " + podio.size());
+            }
+            // notifica anche la coda (Giudice legge da qui)
+            codaArrivi.put(r);
+        }
+
+        /**
+         * Restituisce una copia del podio (snapshot) protetta dal lock.
+         */
+        public List<Risultato> getPodioSnapshot() {
+            synchronized (lockPodio) {
+                return new ArrayList<>(podio);
+            }
+        }
+
+        public void avviaGaraEAttendiArrivi() {
+            // metodo di comodo: sottomette e dà il via (compatibile con v1.0)
+            avviaPartecipanti();
 
             try { Thread.sleep(200); } catch (InterruptedException e) {}
 
@@ -174,33 +216,14 @@ public class GaraAuto {
         }
 
         public boolean isGaraFermata() { return garaFermata; }
-        // Restituisce il CountDownLatch della partenza (per essere usato dal Giudice)
-        public CountDownLatch getSegnalePartenza() {
-            return segnalePartenza;
-        }
 
-        // Restituisce la coda degli arrivi (per essere letta dal Giudice)
-        public BlockingQueue<Risultato> getCodaArrivi() {
-            return codaArrivi;
-        }
-
-        // Numero di partecipanti attesi
-        public int getNumeroPartecipanti() {
-            return partecipanti.size();
-        }
-
-        // Avvia i runnable dei partecipanti (submits al pool) senza dare il via:
-        public void avviaPartecipanti() {
-            for (Partecipante p : partecipanti) {
-                pool.submit(new PartecipanteRunnable(p, pista, segnalePartenza, codaArrivi, this));
-            }
-        }
-
-        // Metodo pubblico per chiudere il pool (il Giudice lo chiamerà alla fine)
-        public void chiudiPool() {
-            pool.shutdownNow();
-        }
+        // Getter e utilità per il Giudice (v2.0 compatibilità)
+        public CountDownLatch getSegnalePartenza() { return segnalePartenza; }
+        public BlockingQueue<Risultato> getCodaArrivi() { return codaArrivi; }
+        public int getNumeroPartecipanti() { return partecipanti.size(); }
+        public void chiudiPool() { pool.shutdownNow(); }
     }
+
     /**
      * Giudice effettua il conto alla rovescia, dà il via e monitora gli arrivi.
      */
